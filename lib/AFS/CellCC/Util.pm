@@ -28,7 +28,8 @@ use POSIX qw(WNOHANG WIFSIGNALED WTERMSIG WIFEXITED WEXITSTATUS);
 
 require Exporter;
 our @ISA = qw(Exporter);
-our @EXPORT_OK = qw(describe_file spawn_child monitor_child pretty_bytes scratch_ok);
+our @EXPORT_OK = qw(describe_file spawn_child monitor_child pretty_bytes scratch_ok
+                    calc_checksum);
 
 # Return a "pretty" human-readable modification of a number of bytes. e.g.
 # "1.00 MB" instead of "1048576".
@@ -329,6 +330,60 @@ scratch_ok($$$$$) {
           "$scratch_min";
 
     return 1;
+}
+
+# Return the checksum of the file received as an argument.
+# The checksum returned by this function will be in following
+# format: "algorithm:checksum", where algorithm is the algorithm
+# of choice (e.g. MD5) and checksum is the checksum of the file
+# received as an argument. This checksum will be in hexadecimal form.
+sub
+calc_checksum($$$$$$) {
+    my ($dumpfh, $filesize, $algo, $jobid, $dvref, $state) = @_;
+
+    if ($filesize < 0) {
+        die("The size of the file cannot be negative\n");
+    }
+
+    my $start = time();
+    my $now = $start;
+
+    my $total = pretty_bytes($filesize);
+    my $bytes;
+    my $nbytes;
+
+    my $digest = Digest->new($algo);
+    my $checksum;
+
+    my $buf;
+    my $descr;
+
+    while (1) {
+        $nbytes = read($dumpfh, $buf, 16384);
+
+        if ($nbytes == 0) {
+            last;
+        }
+        if (!defined($nbytes)) {
+            die("Read of dump file failed: $!\n");
+        }
+        $digest->add($buf);
+
+        $now = time();
+        if ($now < $start || $now - $start > 60) {
+            $bytes = pretty_bytes(tell($dumpfh));
+            $descr = "Checksumming dump blob ($bytes / $total)";
+
+            update_job(jobid => $jobid,
+                       dvref => $dvref,
+                       to_state => $state,
+                       timeout => 120,
+                       description => $descr);
+            $start = time();
+        }
+    }
+    $checksum = $digest->hexdigest;
+    return "$algo:$checksum";
 }
 
 1;
